@@ -1,0 +1,12 @@
+{
+  "name": "sms-wasm",
+  "private": true,
+  "scripts": {
+    "build": "wasm-pack build --target web --release --out-dir www/pkg",
+    "dev": "wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

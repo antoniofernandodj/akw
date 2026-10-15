@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMS WASM</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center;
+         justify-content:center; gap:12px; background:#111; color:#ccc; font:14px system-ui,sans-serif; }
+  canvas { width:min(96vw, calc(80vh * 4 / 3)); aspect-ratio:256/192; image-rendering:pixelated;
+           background:#000; border:2px solid #333; }
+  .keys { opacity:.7; text-align:center; line-height:1.6; }
+  button, label.file { background:#222; color:#ccc; border:1px solid #444; padding:4px 10px; border-radius:4px; cursor:pointer; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="256" height="192"></canvas>
+<div id="hint" hidden>Carregue uma ROM de Master System (.sms) ou arraste o arquivo para cá.</div>
+<div class="keys">
+  Setas: mover · Z: botão 1 · X: botão 2 · Enter: pause/start · R: reset<br>
+  <button id="reset">Reset</button>
+  <label class="file">Carregar outra ROM <input id="file" type="file" accept=".sms,.bin" hidden></label>
+</div>
+<script type="module">
+import init, { Emulator } from './pkg/sms_wasm.js';
+
+await init();
+const ctx = document.getElementById('screen').getContext('2d');
+const img = ctx.createImageData(256, 192);
+const FRAME = 1 / 59.92;
+let emu, audio, nextAudio = 0, last = 0, acc = 0;
+
+async function load(bytes) {
+  emu = new Emulator(bytes);
+}
+const hint = document.getElementById('hint');
+try {
+  const r = await fetch('awd.sms');
+  if (!r.ok) throw 0;
+  await load(new Uint8Array(await r.arrayBuffer()));
+} catch {
+  hint.hidden = false; // no bundled ROM: wait for the user to pick one
+}
+
+const keys = { ArrowUp:0, ArrowDown:1, ArrowLeft:2, ArrowRight:3, KeyZ:4, KeyX:5 };
+function key(e, down) {
+  if (!emu) return;
+  if (e.code in keys) { emu.set_button(keys[e.code], down); e.preventDefault(); }
+  else if (down && !e.repeat && e.code === 'Enter') { emu.pause(); e.preventDefault(); }
+  else if (down && e.code === 'KeyR') emu.reset();
+  if (down && !audio) startAudio();
+}
+addEventListener('keydown', e => key(e, true));
+addEventListener('keyup', e => key(e, false));
+addEventListener('pointerdown', () => { if (!audio) startAudio(); });
+document.getElementById('reset').onclick = () => emu && emu.reset();
+document.getElementById('file').onchange = async e => {
+  const f = e.target.files[0];
+  if (f) { await load(new Uint8Array(await f.arrayBuffer())); hint.hidden = true; }
+};
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', async e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f) { await load(new Uint8Array(await f.arrayBuffer())); hint.hidden = true; }
+});
+
+function startAudio() {
+  audio = new AudioContext({ sampleRate: 44100 });
+  nextAudio = 0;
+}
+
+function pushAudio(samples) {
+  if (!audio || !samples.length) return;
+  const buf = audio.createBuffer(1, samples.length, 44100);
+  buf.copyToChannel(samples, 0);
+  const src = audio.createBufferSource();
+  src.buffer = buf;
+  src.connect(audio.destination);
+  const now = audio.currentTime;
+  if (nextAudio < now + 0.02) nextAudio = now + 0.06; // underrun: re-sync with a little headroom
+  src.start(nextAudio);
+  nextAudio += samples.length / 44100;
+}
+
+function tick(t) {
+  if (!emu) { requestAnimationFrame(tick); return; }
+  acc += Math.min((t - last) / 1000, 0.1);
+  last = t;
+  let ran = false;
+  while (acc >= FRAME) {
+    emu.frame();
+    pushAudio(emu.take_audio());
+    acc -= FRAME;
+    ran = true;
+  }
+  if (ran) {
+    img.data.set(emu.framebuffer());
+    ctx.putImageData(img, 0, 0);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(t => { last = t; tick(t); });
+</script>
+</body>
+</html>
