@@ -2,9 +2,10 @@
   "name": "sms-wasm",
   "private": true,
   "scripts": {
-    "build": "wasm-pack build --target web --release --out-dir www/pkg",
+    "build:wasm": "wasm-pack build --target web --release --out-dir www/pkg",
+    "build": "echo 'www/pkg is prebuilt; run build:wasm locally to regenerate'",
     "dev": "wrangler dev",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^4"
