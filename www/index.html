@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <title>SMS WASM</title>
 <style>
   :root { color-scheme: dark; }
@@ -11,14 +11,53 @@
   canvas { width:min(96vw, calc(80vh * 4 / 3)); aspect-ratio:256/192; image-rendering:pixelated;
            background:#000; border:2px solid #333; }
   .keys { opacity:.7; text-align:center; line-height:1.6; }
+  body { -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
+  #touch { display:none; width:100%; max-width:520px; padding:0 16px; box-sizing:border-box;
+           justify-content:space-between; align-items:center; gap:12px;
+           user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:none; }
+  body.touch #touch { display:flex; }
+  body.touch #kbhint { display:none; }
+  #dpad { position:relative; width:156px; height:156px; border-radius:50%; background:#2228; border:2px solid #444; flex:none; }
+  #dpad i { position:absolute; width:46px; height:46px; display:grid; place-items:center; font-style:normal;
+            font-size:22px; color:#888; border-radius:10px; pointer-events:none; }
+  #dpad i.on { background:#666; color:#fff; }
+  #dpad i[data-d="0"] { left:55px; top:6px; }
+  #dpad i[data-d="1"] { left:55px; bottom:6px; }
+  #dpad i[data-d="2"] { left:6px; top:55px; }
+  #dpad i[data-d="3"] { right:6px; top:55px; }
+  #abtns { display:flex; gap:14px; align-items:flex-end; flex:none; }
+  .ab { width:72px; height:72px; border-radius:50%; font-size:22px; font-weight:700; padding:0;
+        background:#2228; border:2px solid #555; color:#aaa; touch-action:none; }
+  .ab.on, .sysb.on { background:#666; color:#fff; }
+  #b1 { margin-bottom:34px; }
+  #sys { display:flex; flex-direction:column; gap:10px; }
+  .sysb { padding:8px 14px; font-size:13px; touch-action:none; }
+  @media (orientation:landscape) and (max-height:520px) {
+    body.touch #touch { position:fixed; left:0; right:0; bottom:calc(10px + env(safe-area-inset-bottom));
+                        max-width:none; padding:0 calc(16px + env(safe-area-inset-left)); pointer-events:none; }
+    body.touch #touch > * { pointer-events:auto; opacity:.65; }
+    body.touch #sys { position:fixed; top:8px; right:12px; flex-direction:row; }
+    canvas { width:min(70vw, calc(96vh * 4 / 3)); }
+  }
   button, label.file { background:#222; color:#ccc; border:1px solid #444; padding:4px 10px; border-radius:4px; cursor:pointer; }
 </style>
 </head>
 <body>
 <canvas id="screen" width="256" height="192"></canvas>
+<div id="touch">
+  <div id="dpad"><i data-d="0">▲</i><i data-d="1">▼</i><i data-d="2">◀</i><i data-d="3">▶</i></div>
+  <div id="sys">
+    <button class="sysb" data-sys="pause">START</button>
+    <button class="sysb" data-sys="reset">RESET</button>
+  </div>
+  <div id="abtns">
+    <button class="ab" id="b2" data-btn="5">2</button>
+    <button class="ab" id="b1" data-btn="4">1</button>
+  </div>
+</div>
 <div id="hint" hidden>Carregue uma ROM de Master System (.sms) ou arraste o arquivo para cá.</div>
 <div class="keys">
-  Setas: mover · Z: botão 1 · X: botão 2 · Enter: pause/start · R: reset<br>
+  <span id="kbhint">Setas: mover · Z: botão 1 · X: botão 2 · Enter: pause/start · R: reset<br></span>
   <button id="reset">Reset</button>
   <label class="file">Carregar outra ROM <input id="file" type="file" accept=".sms,.bin" hidden></label>
 </div>
@@ -69,6 +108,74 @@ addEventListener('drop', async e => {
 function startAudio() {
   audio = new AudioContext({ sampleRate: 44100 });
   nextAudio = 0;
+  audio.resume?.();
+}
+// iOS only unlocks audio from a completed gesture
+addEventListener('pointerup', () => {
+  if (!audio) startAudio();
+  else if (audio.state === 'suspended') audio.resume();
+});
+
+// ---- Touch controls ----
+function enableTouch() { document.body.classList.add('touch'); }
+if (matchMedia('(pointer: coarse)').matches) enableTouch();
+addEventListener('touchstart', enableTouch, { once: true, passive: true });
+document.addEventListener('contextmenu', e => { if (e.target.closest('#touch')) e.preventDefault(); });
+
+const dpad = document.getElementById('dpad');
+const dirs = [false, false, false, false];
+function setDir(i, on) {
+  if (dirs[i] === on) return;
+  dirs[i] = on;
+  emu && emu.set_button(i, on);
+  dpad.querySelector(`[data-d="${i}"]`).classList.toggle('on', on);
+}
+function dpadUpdate(e) {
+  const r = dpad.getBoundingClientRect();
+  const dx = e.clientX - (r.left + r.width / 2);
+  const dy = e.clientY - (r.top + r.height / 2);
+  const dead = r.width * 0.12;
+  const near = Math.hypot(dx, dy) >= dead;
+  const horiz = near && Math.abs(dx) > Math.abs(dy) * 0.4142;
+  const vert = near && Math.abs(dy) > Math.abs(dx) * 0.4142;
+  setDir(0, vert && dy < 0);
+  setDir(1, vert && dy > 0);
+  setDir(2, horiz && dx < 0);
+  setDir(3, horiz && dx > 0);
+}
+let dpadPointer = null;
+dpad.addEventListener('pointerdown', e => {
+  dpadPointer = e.pointerId;
+  try { dpad.setPointerCapture(e.pointerId); } catch {}
+  dpadUpdate(e);
+  e.preventDefault();
+});
+dpad.addEventListener('pointermove', e => { if (e.pointerId === dpadPointer) dpadUpdate(e); });
+const dpadRelease = e => {
+  if (e.pointerId !== dpadPointer) return;
+  dpadPointer = null;
+  [0, 1, 2, 3].forEach(i => setDir(i, false));
+};
+dpad.addEventListener('pointerup', dpadRelease);
+dpad.addEventListener('pointercancel', dpadRelease);
+
+for (const b of document.querySelectorAll('.ab')) {
+  const n = +b.dataset.btn;
+  const set = on => { emu && emu.set_button(n, on); b.classList.toggle('on', on); };
+  b.addEventListener('pointerdown', e => { try { b.setPointerCapture(e.pointerId); } catch {} set(true); e.preventDefault(); });
+  b.addEventListener('pointerup', () => set(false));
+  b.addEventListener('pointercancel', () => set(false));
+}
+for (const b of document.querySelectorAll('.sysb')) {
+  b.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    b.classList.add('on');
+    if (!emu) return;
+    if (b.dataset.sys === 'pause') emu.pause(); else emu.reset();
+  });
+  const off = () => b.classList.remove('on');
+  b.addEventListener('pointerup', off);
+  b.addEventListener('pointercancel', off);
 }
 
 function pushAudio(samples) {
